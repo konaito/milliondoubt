@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f2ec">
+    <meta name="description" content="ミリオンダウトをNN／CPUと遊べるブラウザアプリ">
+    <title>Million Doubt — 嘘つき大富豪</title>
+    <link rel="stylesheet" href="styles.css?v=2">
+  </head>
+  <body>
+    <div class="site-shell" id="app">
+      <main class="screen landing-screen" id="landing-screen">
+        <div class="brand-lockup">
+          <p class="eyebrow">MILLION DOUBT / SELF-PLAY EDITION</p>
+          <h1><span>Million</span><strong>Doubt</strong></h1>
+          <p class="brand-subtitle">嘘つき大富豪 — 裏札で仕掛ける、読み合いの一戦。</p>
+        </div>
+
+        <section class="mode-grid" aria-label="対戦モード">
+          <button class="mode-card mode-card-primary" id="start-game" type="button">
+            <span class="mode-number">1 <i>vs</i> 1</span>
+            <span class="mode-label">NN／CPUと対戦</span>
+            <span class="mode-arrow">→</span>
+          </button>
+          <button class="mode-card" id="open-rules" type="button">
+            <span class="mode-number">?</span>
+            <span class="mode-label">ルールを見る</span>
+            <span class="mode-arrow">↗</span>
+          </button>
+        </section>
+
+        <p class="landing-caption">54枚のカードから7枚。場より強く出して、裏札で相手の読みを揺さぶる。</p>
+
+        <section class="feature-strip" aria-label="ゲームの特徴">
+          <article class="feature-card">
+            <span class="feature-value">54</span>
+            <span class="feature-unit">CARDS</span>
+            <p>7枚配り、山札からの補充なし</p>
+          </article>
+          <article class="feature-card feature-card-accent">
+            <span class="feature-value">裏</span>
+            <span class="feature-unit">BLUFF</span>
+            <p>表裏を混ぜて役を作れる</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-value">11</span>
+            <span class="feature-unit">BURST</span>
+            <p>手札11枚以上でバースト</p>
+          </article>
+        </section>
+
+        <div class="model-note">
+          <span class="status-dot"></span>
+          <span><b id="landing-model-status">NNモデルを確認中</b><small>学習済みモデルが無い場合はルールベースCPUで対戦できます。</small></span>
+        </div>
+
+        <p class="fine-print">ファンメイドのブラウザ実装。公式アプリとは関係ありません。</p>
+      </main>
+
+      <main class="screen game-screen is-hidden" id="game-screen">
+        <header class="game-header">
+          <button class="icon-button" id="back-home" type="button" aria-label="ホームへ戻る">←</button>
+          <div class="game-title-lockup">
+            <span class="eyebrow">LIVE MATCH / 1 VS 1</span>
+            <strong>Million <em>Doubt</em></strong>
+          </div>
+          <div class="header-meta">
+            <span class="model-chip" id="model-chip">CPU</span>
+            <button class="icon-button" id="restart-game" type="button" aria-label="最初からやり直す">↻</button>
+          </div>
+        </header>
+
+        <section class="scoreboard" aria-label="対戦状況">
+          <div class="player-line player-line-opponent">
+            <span class="player-avatar avatar-opponent">N</span>
+            <span><b>NN／CPU</b><small id="opponent-state">思考中</small></span>
+            <strong><span id="opponent-count">7</span><small>枚</small></strong>
+          </div>
+          <div class="match-state">
+            <span class="turn-indicator" id="turn-indicator">あなたの番</span>
+            <span id="round-label">ROUND 01</span>
+          </div>
+          <div class="player-line player-line-human">
+            <strong><span id="human-count">7</span><small>枚</small></strong>
+            <span><b>あなた</b><small id="human-state">待機中</small></span>
+            <span class="player-avatar avatar-human">Y</span>
+          </div>
+        </section>
+
+        <section class="table-panel" aria-label="場">
+          <div class="table-toolbar">
+            <span class="table-label">TABLE</span>
+            <span class="rule-state" id="rule-state">通常</span>
+            <span class="field-count" id="field-count">場札 0枚</span>
+          </div>
+          <div class="field-area" id="field-area">
+            <div class="empty-table" id="empty-table"><span>✦</span><b>場は空です</b><small>好きな役で始められます</small></div>
+          </div>
+          <div class="table-message" id="table-message">あなたの手番です。カードを選んでください。</div>
+        </section>
+
+        <section class="hand-panel" aria-label="自分の手札">
+          <div class="hand-heading">
+            <div><span class="table-label">YOUR HAND</span><b>手札を選択</b></div>
+            <span class="selection-count" id="selection-count">0枚選択</span>
+          </div>
+          <div class="hand-area" id="hand-area"></div>
+          <div class="selection-preview" id="selection-preview">
+            <span class="preview-label">SELECTED</span><span id="preview-text">カードをタップして選択</span>
+          </div>
+          <div class="action-row">
+            <button class="secondary-action" id="toggle-hidden" type="button" disabled><span>◌</span> 選択札を裏返す</button>
+            <button class="secondary-action pass-action" id="pass-action" type="button" disabled>パス</button>
+            <button class="primary-action" id="play-action" type="button" disabled>場に出す <span>→</span></button>
+          </div>
+        </section>
+
+        <section class="match-log" aria-label="対戦ログ">
+          <button class="log-toggle" id="log-toggle" type="button"><span>EVENT LOG</span><span>開く ＋</span></button>
+          <div class="log-list is-collapsed" id="log-list"></div>
+        </section>
+      </main>
+
+      <div class="modal-backdrop is-hidden" id="challenge-modal" role="dialog" aria-modal="true" aria-labelledby="challenge-title">
+        <section class="modal-card">
+          <span class="modal-kicker">YOUR CALL</span>
+          <h2 id="challenge-title">この裏札、信じる？</h2>
+          <p id="challenge-copy">CPUが裏札を含むカードを出しました。読みを決めてください。</p>
+          <div class="modal-field" id="challenge-field"></div>
+          <div class="modal-actions">
+            <button class="secondary-action" id="suru-action" type="button">スルー <small>信じて進む</small></button>
+            <button class="danger-action" id="doubt-action" type="button">ダウト <small>裏札を検める</small></button>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop is-hidden" id="penalty-modal" role="dialog" aria-modal="true" aria-labelledby="penalty-title">
+        <section class="modal-card">
+          <span class="modal-kicker">PENALTY PICK</span>
+          <h2 id="penalty-title">ペナルティ札を選ぶ</h2>
+          <p id="penalty-copy">場札から相手に渡すカードを選択してください。残りは捨て札になります。</p>
+          <div class="penalty-field" id="penalty-field"></div>
+          <div class="modal-actions modal-actions-single">
+            <button class="primary-action" id="penalty-action" type="button">このカードを渡す <span>→</span></button>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop is-hidden" id="result-modal" role="dialog" aria-modal="true" aria-labelledby="result-title">
+        <section class="modal-card result-card">
+          <span class="modal-kicker">MATCH RESULT</span>
+          <h2 id="result-title">あなたの勝ち</h2>
+          <p id="result-copy">手札を先に無くしました。</p>
+          <div class="result-score"><span id="result-score-value">+7</span><small>勝ち枚数</small></div>
+          <button class="primary-action" id="result-restart" type="button">もう一度対戦 <span>↻</span></button>
+        </section>
+      </div>
+
+      <div class="rules-drawer is-hidden" id="rules-drawer" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+        <div class="drawer-card">
+          <button class="drawer-close" id="close-rules" type="button" aria-label="ルールを閉じる">×</button>
+          <span class="modal-kicker">QUICK RULES</span>
+          <h2 id="rules-title">ミリオンダウトの遊び方</h2>
+          <div class="rules-list">
+            <p><b>01</b><span>3が最弱、2が最強。ジョーカーは最強。場より強い同じ役を出します。</span></p>
+            <p><b>02</b><span>同じ数字の組み合わせ、または同じスートの3枚以上の階段を出せます。</span></p>
+            <p><b>03</b><span>出すカードは好きな枚数を裏向きにできます。裏札で嘘の役を作れます。</span></p>
+            <p><b>04</b><span>裏札に対してダウトできます。成功・失敗に応じてペナルティが発生します。</span></p>
+            <p><b>05</b><span>8を含む役は場を流し、4枚以上の同数字は革命、JはJバックです。</span></p>
+            <p><b>06</b><span>手札0枚で勝利。手札が11枚以上になるとバーストです。</span></p>
+          </div>
+          <p class="drawer-note">このアプリは <a href="RULEBOOK.md" target="_blank" rel="noreferrer">RULEBOOK.md</a> の調査版ルールを基準にしています。</p>
+        </div>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="app.js?v=2"></script>
+  </body>
+</html>
