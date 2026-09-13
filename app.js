@@ -201,12 +201,11 @@ function cardMarkup(id, hidden = false, options = {}) {
   const card = CARDS[id];
   const selected = options.selected ? " selected" : "";
   const penalty = options.penalty ? " penalty-card" : "";
-  const tag = options.tag ? `<span class="card-tag">${options.tag}</span>` : "";
   const rank = card.joker ? "★" : RANKS[card.rank];
   const suit = card.joker ? "JOKER" : SUITS[card.suit];
   const red = !card.joker && (card.suit === 1 || card.suit === 2) ? " red" : "";
   return `<button class="card${hidden ? " card-hidden" : ""}${selected}${penalty}" type="button" data-card-id="${id}"${options.action ? ` data-card-action="${options.action}"` : ""} aria-label="${hidden ? "裏札" : cardLabel(id)}">` +
-    `<span class="card-suit${red}">${suit}</span><span class="card-rank${red}">${rank}</span>${tag}</button>`;
+    `<span class="card-suit${red}">${suit}</span><span class="card-rank${red}">${rank}</span></button>`;
 }
 
 function snapshot() {
@@ -736,14 +735,18 @@ function render() {
         : state.turn === 0 ? (currentName ? `場は ${currentName}。場より強い役を出してください。` : "あなたの手番です。カードを選んでください。")
           : "CPUが次の一手を考えています。";
 
-  $("#hand-area").innerHTML = state.hands[0].map((id) => cardMarkup(id, false, {
+  $("#hand-area").innerHTML = state.hands[0].map((id) => cardMarkup(id, state.hiddenSelected.has(id), {
     selected: state.selected.has(id),
-    tag: state.hiddenSelected.has(id) ? "裏" : "表",
     action: "hand",
   })).join("");
   $("#selection-count").textContent = `${state.selected.size}枚選択`;
+  const allSelectedHidden = state.selected.size > 0
+    && [...state.selected].every((id) => state.hiddenSelected.has(id));
+  $("#toggle-hidden").innerHTML = allSelectedHidden
+    ? "<span>◉</span> 表に戻す"
+    : "<span>◌</span> 裏にする";
   $("#preview-text").textContent = state.selected.size
-    ? state.hands[0].filter((id) => state.selected.has(id)).map((id) => `${cardLabel(id)}${state.hiddenSelected.has(id) ? "（裏）" : "（表）"}`).join("  ")
+    ? state.hands[0].filter((id) => state.selected.has(id)).map((id) => `${state.hiddenSelected.has(id) ? "裏 " : ""}${cardLabel(id)}`).join("  ")
     : "カードをタップして選択";
   const humanTurn = state.phase === "play" && state.turn === 0;
   $("#toggle-hidden").disabled = !humanTurn || !state.selected.size;
