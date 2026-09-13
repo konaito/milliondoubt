@@ -180,11 +180,11 @@ a { color: var(--red-dark); }
 
 .card-hidden { border-color: var(--red); background: repeating-linear-gradient(135deg, #c25743 0, #c25743 5px, #b54836 5px, #b54836 9px); color: #fff; }
 
+.card-hidden::before { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; content: "裏"; font-size: 18px; font-weight: 900; letter-spacing: .12em; }
+
 .card-hidden::after { position: absolute; inset: 5px; border: 1px solid rgba(255,255,255,.42); border-radius: 5px; content: ""; }
 
 .card-hidden .card-rank, .card-hidden .card-suit { visibility: hidden; }
-
-.card-tag { position: absolute; right: 4px; bottom: 4px; z-index: 1; padding: 2px 4px; border-radius: 4px; background: rgba(0,0,0,.46); color: #fff; font-size: 7px; font-weight: 900; letter-spacing: .08em; }
 
 .hand-panel { margin-top: 15px; padding: 17px 18px 18px; border: 1px solid var(--line); border-radius: 17px; background: rgba(255, 253, 249, .62); }
 
