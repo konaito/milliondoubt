@@ -332,6 +332,9 @@ function completeActionClock(player) {
 
 function finish(winner, reason) {
   stopClock();
+  window.clearTimeout(toastTimer);
+  toastTimer = null;
+  $("#toast").classList.remove("is-visible");
   state.winner = winner;
   state.endReason = reason;
   state.phase = "terminal";
@@ -550,6 +553,10 @@ class WebPolicy {
     return values[0];
   }
 
+  scoreAction(action) {
+    return this.forward([...observationVector(1), ...actionVector(action)]);
+  }
+
   chooseAction(currentState, actions) {
     if (!actions.length) return null;
     const player = 1;
@@ -585,26 +592,56 @@ function combinations(items, size) {
 }
 
 function chooseCpuAction(actions) {
-  if (webModel && typeof webModel.chooseAction === "function") {
-    const picked = webModel.chooseAction(state, actions);
-    if (picked) return picked;
-  }
   const playable = actions.filter((action) => !action.pass);
   if (!playable.length) return actions.find((action) => action.pass);
+
   const scored = playable.map((action) => {
     const actual = legalAgainst(state.effectiveCurrent, action, true);
     const hiddenCount = action.hidden.filter(Boolean).length;
-    let score = Math.random() * 4;
-    score += action.cardIds.length * 2.2;
-    score += actual ? 4 : -2;
-    if (action.cardIds.length === state.hands[1].length) score += 70;
-    if (hiddenCount) score += (state.current ? 1.1 : .3) * hiddenCount;
-    if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === EIGHT_RANK)) score += 8;
-    if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === JACK_RANK)) score += 1.5;
+    const handSize = state.hands[1].length;
+    const claims = claimOptions(action.cardIds, action.cardIds.map(() => false));
+    const power = claims.length ? Math.min(...claims.map((claim) => claimPower(claim, state.revolution, state.jBack))) : -1;
+    const referenceClaims = state.effectiveCurrent
+      ? claimOptions(state.effectiveCurrent.cardIds, state.effectiveCurrent.hidden)
+      : [];
+    const referencePower = referenceClaims.length
+      ? Math.max(...referenceClaims.map((claim) => claimPower(claim, state.revolution, state.jBack)))
+      : -1;
+    const removesDifficultCards = action.cardIds.reduce((sum, id) => {
+      const card = CARDS[id];
+      return sum + (card.joker ? 0 : 12 - card.rank);
+    }, 0);
+    let score = actual ? 180 : -80;
+    score += action.cardIds.length * 18;
+    score += removesDifficultCards * .55;
+    score -= hiddenCount * 24;
+    if (!state.effectiveCurrent) score += action.cardIds.length * 10;
+    if (state.effectiveCurrent && power >= 0 && referencePower >= 0) {
+      score -= Math.max(0, power - referencePower) * .7;
+    }
+    if (action.cardIds.length === handSize) score += actual ? 1500 : 260;
+    if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === EIGHT_RANK)) score += 38;
+    if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === JACK_RANK)) score += 4;
     return { action, score };
   });
+
+  const pass = actions.find((action) => action.pass);
+  const truthful = scored.filter((item) => legalAgainst(state.effectiveCurrent, item.action, true));
+  if (!truthful.length && pass) {
+    const emergency = scored.filter((item) => item.action.cardIds.length >= 2 || item.action.cardIds.length === state.hands[1].length);
+    if (!emergency.length) return pass;
+  }
+
   scored.sort((a, b) => b.score - a.score);
-  return scored[0].action;
+  const bestScore = scored[0].score;
+  const shortlist = scored.filter((item) => bestScore - item.score <= 2).slice(0, 8);
+  if (webModel && typeof webModel.scoreAction === "function" && shortlist.length > 1) {
+    shortlist.forEach((item) => { item.modelScore = webModel.scoreAction(item.action); });
+    shortlist.sort((a, b) => b.modelScore - a.modelScore);
+  }
+  if (shortlist.length) return shortlist[0].action;
+
+  return pass || scored[0].action;
 }
 
 function cpuTurn() {
@@ -627,11 +664,13 @@ function cpuTurn() {
 
 function cpuChallenge() {
   if (state.phase !== "challenge-cpu" || !state.pending) return;
-  const truth = legalAgainst(state.pendingBefore.effectiveCurrent, state.pending, true);
   const hiddenCount = state.pending.hidden.filter(Boolean).length;
-  const doubt = !truth || (hiddenCount >= 2 && Math.random() < .35);
+  // The CPU only sees the public claim and the number of hidden cards here.
+  // Looking at the pending card ids would leak the human's private hand.
+  const doubtChance = hiddenCount >= state.pending.cardIds.length ? .28 : hiddenCount >= 2 ? .2 : .08;
+  const doubt = hiddenCount > 0 && Math.random() < doubtChance;
   if (doubt) {
-    addLog(`CPUがダウト。${actualClaim(state.pending)}でした。`);
+    addLog("CPUがダウト。裏札を検めます。");
     resolveDoubt(1);
   } else {
     addLog("CPUがスルー。裏札を信じました。");
@@ -689,10 +728,9 @@ function resolveDoubt(challenger) {
 
 function cpuPenalty() {
   if (state.phase !== "penalty" || state.penaltySelector !== 1) return;
-  const sorted = [...state.field].sort((a, b) => CARDS[a].rank - CARDS[b].rank);
-  const amount = Math.random() < .68 ? 0 : 1;
-  const selected = sorted.slice(0, amount);
-  resolvePenalty(selected);
+  // The selector can choose zero cards; giving cards away only strengthens the
+  // opponent, so the strategic choice is to take no penalty cards.
+  resolvePenalty([]);
 }
 
 function resolvePenalty(selected) {
@@ -912,10 +950,10 @@ async function loadWebModel() {
     $("#landing-model-status").textContent = Number.isFinite(trainedGames) && trainedGames > 0
       ? `Web NNモデルを読み込みました（${trainedGames.toLocaleString("ja-JP")}局）`
       : "Web NNモデルを読み込みました";
-    $("#model-chip").textContent = "WEB NN";
+    $("#model-chip").textContent = "WEB NN + STRATEGY";
   } catch (_error) {
     $("#landing-model-status").textContent = "ルールベースCPU準備完了";
-    $("#model-chip").textContent = "CPU FALLBACK";
+    $("#model-chip").textContent = "CPU STRATEGY";
   }
 }
 

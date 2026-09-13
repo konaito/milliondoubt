@@ -46,6 +46,7 @@ def export(checkpoint_path: Path, output_path: Path) -> None:
         "format": "milliondoubt-web-v1",
         "source": checkpoint_path.name,
         "episodes": checkpoint.get("episodes"),
+        "strategy": checkpoint.get("strategy", "legacy-self-play"),
         "obs_size": checkpoint.get("obs_size", 194),
         "action_size": checkpoint.get("action_size", 186),
         "layers": layers,
