@@ -6,6 +6,9 @@ const SUIT_NAMES = ["スペード", "ハート", "ダイヤ", "クラブ"];
 const JOKER_RANK = 13;
 const EIGHT_RANK = 5;
 const JACK_RANK = 8;
+const TURN_TIME_MS = 60_000;
+const ACTION_INCREMENT_MS = 10_000;
+const CLOCK_TICK_MS = 250;
 
 const CARDS = Array.from({ length: 54 }, (_, id) => {
   if (id >= 52) return { id, rank: JOKER_RANK, suit: -1, joker: true };
@@ -17,6 +20,7 @@ const $ = (selector) => document.querySelector(selector);
 let webModel = null;
 let toastTimer = null;
 let cpuTimer = null;
+let clockTimer = null;
 let state = freshState();
 
 function freshState() {
@@ -24,6 +28,7 @@ function freshState() {
     hands: [[], []],
     turn: 0,
     current: null,
+    effectiveCurrent: null,
     field: [],
     fieldHidden: new Set(),
     revealed: new Set(),
@@ -35,6 +40,7 @@ function freshState() {
     phase: "play",
     pending: null,
     pendingBefore: null,
+    pendingTruth: null,
     penaltySelector: null,
     penaltyLoser: null,
     penaltySelected: new Set(),
@@ -43,6 +49,8 @@ function freshState() {
     round: 1,
     selected: new Set(),
     hiddenSelected: new Set(),
+    clockMs: [TURN_TIME_MS, TURN_TIME_MS],
+    turnDeadline: null,
     log: [],
   };
 }
@@ -201,16 +209,18 @@ function cardMarkup(id, hidden = false, options = {}) {
   const card = CARDS[id];
   const selected = options.selected ? " selected" : "";
   const penalty = options.penalty ? " penalty-card" : "";
+  const revealing = options.revealing ? " is-revealing" : "";
   const rank = card.joker ? "★" : RANKS[card.rank];
   const suit = card.joker ? "JOKER" : SUITS[card.suit];
   const red = !card.joker && (card.suit === 1 || card.suit === 2) ? " red" : "";
-  return `<button class="card${hidden ? " card-hidden" : ""}${selected}${penalty}" type="button" data-card-id="${id}"${options.action ? ` data-card-action="${options.action}"` : ""} aria-label="${hidden ? "裏札" : cardLabel(id)}">` +
+  return `<button class="card${hidden ? " card-hidden" : ""}${selected}${penalty}${revealing}" type="button" data-card-id="${id}"${options.action ? ` data-card-action="${options.action}"` : ""} aria-label="${hidden ? "裏札" : cardLabel(id)}">` +
     `<span class="card-suit${red}">${suit}</span><span class="card-rank${red}">${rank}</span></button>`;
 }
 
 function snapshot() {
   return {
     current: state.current,
+    effectiveCurrent: state.effectiveCurrent,
     revolution: state.revolution,
     jBack: state.jBack,
     suitLock: new Set(state.suitLock),
@@ -234,6 +244,7 @@ function showToast(message) {
 
 function clearField() {
   state.current = null;
+  state.effectiveCurrent = null;
   state.field = [];
   state.fieldHidden = new Set();
   state.revealed = new Set();
@@ -242,7 +253,85 @@ function clearField() {
   state.suitLock = new Set();
 }
 
+function formatClock(milliseconds) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  return "0" + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+}
+
+function timedHumanPhase() {
+  return state.turn === 0 && (
+    state.phase === "play"
+    || state.phase === "challenge-human"
+    || (state.phase === "penalty" && state.penaltySelector === 0)
+  );
+}
+
+function renderClock() {
+  const opponentClock = $("#opponent-clock");
+  const humanClock = $("#human-clock");
+  const clockChip = $("#clock-chip");
+  if (!opponentClock || !humanClock || !clockChip) return;
+  opponentClock.textContent = formatClock(state.clockMs[1]);
+  humanClock.textContent = formatClock(state.clockMs[0]);
+  clockChip.textContent = state.turn === 0
+    ? "あなた " + formatClock(state.clockMs[0])
+    : "CPU " + formatClock(state.clockMs[1]);
+  clockChip.classList.toggle("is-active", timedHumanPhase());
+}
+
+function stopClock() {
+  window.clearInterval(clockTimer);
+  clockTimer = null;
+  state.turnDeadline = null;
+}
+
+function setTurn(player) {
+  window.clearInterval(clockTimer);
+  clockTimer = null;
+  state.turn = player;
+  state.turnDeadline = Date.now() + state.clockMs[player];
+}
+
+function updateClock() {
+  if (!timedHumanPhase() || state.turnDeadline === null) {
+    window.clearInterval(clockTimer);
+    clockTimer = null;
+    renderClock();
+    return;
+  }
+  state.clockMs[0] = Math.max(0, state.turnDeadline - Date.now());
+  renderClock();
+  if (state.clockMs[0] === 0) {
+    window.clearInterval(clockTimer);
+    clockTimer = null;
+    finish(1, "timeout");
+  }
+}
+
+function startClock() {
+  window.clearInterval(clockTimer);
+  clockTimer = null;
+  if (!timedHumanPhase() || state.turnDeadline === null) {
+    renderClock();
+    return;
+  }
+  clockTimer = window.setInterval(updateClock, CLOCK_TICK_MS);
+  updateClock();
+}
+
+function completeActionClock(player) {
+  if (state.turn === player && state.turnDeadline !== null) {
+    const remaining = Math.max(0, state.turnDeadline - Date.now());
+    state.clockMs[player] = Math.min(TURN_TIME_MS, remaining + ACTION_INCREMENT_MS);
+  }
+  window.clearInterval(clockTimer);
+  clockTimer = null;
+  state.turnDeadline = null;
+  renderClock();
+}
+
 function finish(winner, reason) {
+  stopClock();
   state.winner = winner;
   state.endReason = reason;
   state.phase = "terminal";
@@ -255,6 +344,8 @@ function finish(winner, reason) {
   $("#result-title").textContent = winner === 0 ? "あなたの勝ち" : "CPUの勝ち";
   $("#result-copy").textContent = reason === "burst"
     ? `${winner === 0 ? "CPU" : "あなた"}をバーストさせました。`
+    : reason === "timeout"
+      ? (winner === 0 ? "CPU" : "あなた") + "の時間切れです。"
     : `${winner === 0 ? "あなた" : "CPU"}が手札を先に無くしました。`;
   $("#result-score-value").textContent = `${winner === 0 ? "+" : "−"}${state.hands[loser].length}`;
   $("#result-modal").classList.remove("is-hidden");
@@ -277,6 +368,7 @@ function acceptPlay(play, previous) {
     state.suitLock = new Set();
   }
   state.current = play;
+  state.effectiveCurrent = allHidden(play) ? previous.effectiveCurrent : play;
   state.lastPlayer = play.owner;
   state.passes = 0;
   if (play.cardIds.length >= 4) {
@@ -291,18 +383,20 @@ function acceptPlay(play, previous) {
   if (hasEight) {
     clearField();
     state.lastPlayer = play.owner;
-    state.turn = play.owner;
+    setTurn(play.owner);
     addLog(`${play.owner === 0 ? "あなた" : "CPU"}の8切り。もう一度出します。`);
   } else {
-    state.turn = 1 - play.owner;
+    setTurn(1 - play.owner);
   }
   state.phase = "play";
   state.pending = null;
   state.pendingBefore = null;
+  state.pendingTruth = null;
   if (!checkEnd(play.owner)) continueTurn();
 }
 
 function continueTurn() {
+  startClock();
   render();
   if (state.phase === "terminal") return;
   if (state.phase === "play" && state.turn === 1) {
@@ -312,6 +406,7 @@ function continueTurn() {
 }
 
 function applyPlay(play) {
+  completeActionClock(play.owner);
   const previous = snapshot();
   const hand = state.hands[play.owner];
   state.hands[play.owner] = hand.filter((id) => !play.cardIds.includes(id));
@@ -325,14 +420,16 @@ function applyPlay(play) {
   if (play.hidden.some(Boolean)) {
     state.pending = play;
     state.pendingBefore = previous;
+    state.pendingTruth = null;
     state.phase = play.owner === 0 ? "challenge-cpu" : "challenge-human";
-    state.turn = 1 - play.owner;
+    setTurn(1 - play.owner);
     render();
     if (play.owner === 0) {
       window.clearTimeout(cpuTimer);
       cpuTimer = window.setTimeout(cpuChallenge, 700);
     } else {
       showChallengeModal();
+      startClock();
     }
   } else {
     acceptPlay(play, previous);
@@ -360,7 +457,7 @@ function enumerateActions(player) {
     masks.forEach((mask) => {
       const hidden = combo.map((_, index) => Boolean(mask & (1 << index)));
       const play = { cardIds: combo, hidden, owner: player };
-      if (legalAgainst(state.current, play)) actions.push(play);
+      if (legalAgainst(state.effectiveCurrent, play)) actions.push(play);
     });
   });
   if (state.current) actions.push({ pass: true, owner: player, cardIds: [], hidden: [] });
@@ -420,9 +517,9 @@ function actionVector(action) {
   });
   values.push(...suits);
   const reference = Array(54).fill(0);
-  if (state.current) {
-    state.current.cardIds.forEach((id, index) => {
-      if (!state.current.hidden[index]) reference[id] = 1;
+  if (state.effectiveCurrent) {
+    state.effectiveCurrent.cardIds.forEach((id, index) => {
+      if (!state.effectiveCurrent.hidden[index]) reference[id] = 1;
     });
   }
   values.push(...reference);
@@ -495,7 +592,7 @@ function chooseCpuAction(actions) {
   const playable = actions.filter((action) => !action.pass);
   if (!playable.length) return actions.find((action) => action.pass);
   const scored = playable.map((action) => {
-    const actual = legalAgainst(state.current, action, true);
+    const actual = legalAgainst(state.effectiveCurrent, action, true);
     const hiddenCount = action.hidden.filter(Boolean).length;
     let score = Math.random() * 4;
     score += action.cardIds.length * 2.2;
@@ -516,9 +613,10 @@ function cpuTurn() {
   const action = chooseCpuAction(actions);
   if (!action) return;
   if (action.pass) {
+    completeActionClock(1);
     const leader = state.lastPlayer;
     clearField();
-    state.turn = leader === null ? 0 : leader;
+    setTurn(leader === null ? 0 : leader);
     state.phase = "play";
     addLog("CPUがパス。場が流れました。");
     continueTurn();
@@ -529,7 +627,7 @@ function cpuTurn() {
 
 function cpuChallenge() {
   if (state.phase !== "challenge-cpu" || !state.pending) return;
-  const truth = legalAgainst(state.pendingBefore.current, state.pending, true);
+  const truth = legalAgainst(state.pendingBefore.effectiveCurrent, state.pending, true);
   const hiddenCount = state.pending.hidden.filter(Boolean).length;
   const doubt = !truth || (hiddenCount >= 2 && Math.random() < .35);
   if (doubt) {
@@ -543,17 +641,20 @@ function cpuChallenge() {
 
 function resolveSuru() {
   if (!state.pending || !state.pendingBefore) return;
+  completeActionClock(state.turn);
   const pending = state.pending;
   const before = state.pendingBefore;
   state.pending = null;
   state.pendingBefore = null;
+  state.pendingTruth = null;
   acceptPlay(pending, before);
 }
 
 function resolveDoubt(challenger) {
   if (!state.pending || !state.pendingBefore) return;
   const pending = state.pending;
-  const truth = legalAgainst(state.pendingBefore.current, pending, true);
+  completeActionClock(challenger);
+  const truth = legalAgainst(state.pendingBefore.effectiveCurrent, pending, true);
   pending.cardIds.forEach((id, index) => {
     if (pending.hidden[index]) {
       state.fieldHidden.delete(id);
@@ -563,19 +664,27 @@ function resolveDoubt(challenger) {
   const success = !truth;
   const selector = success ? challenger : pending.owner;
   const loser = success ? pending.owner : challenger;
+  state.pendingTruth = truth;
   state.penaltySelector = selector;
   state.penaltyLoser = loser;
-  state.turn = selector;
-  state.phase = "penalty";
+  setTurn(selector);
+  state.phase = "reveal";
   addLog(success ? "ダウト成功。ペナルティを選びます。" : "ダウト失敗。ダウト側がペナルティを受けます。");
-  if (selector === 0) {
+  render();
+  window.setTimeout(() => {
+    if (state.phase !== "reveal" || state.pending !== pending) return;
+    state.phase = "penalty";
+    setTurn(selector);
     state.penaltySelected = new Set();
-    showPenaltyModal();
-  } else {
     render();
-    window.clearTimeout(cpuTimer);
-    cpuTimer = window.setTimeout(cpuPenalty, 730);
-  }
+    if (selector === 0) {
+      showPenaltyModal();
+      startClock();
+    } else {
+      window.clearTimeout(cpuTimer);
+      cpuTimer = window.setTimeout(cpuPenalty, 730);
+    }
+  }, 420);
 }
 
 function cpuPenalty() {
@@ -590,6 +699,7 @@ function resolvePenalty(selected) {
   if (state.phase !== "penalty" || state.penaltyLoser === null) return;
   const selector = state.penaltySelector;
   const loser = state.penaltyLoser;
+  completeActionClock(selector);
   const pendingOwner = state.pending ? state.pending.owner : null;
   const unique = [...new Set(selected)].filter((id) => state.field.includes(id));
   state.hands[loser].push(...unique);
@@ -598,38 +708,56 @@ function resolvePenalty(selected) {
     finish(selector, "burst");
     return;
   }
+  const pendingWasTruthful = state.pendingTruth === true;
+  const pending = state.pending;
+  const pendingBefore = state.pendingBefore;
+  if (pendingWasTruthful && pending && pendingBefore) {
+    state.penaltySelector = null;
+    state.penaltyLoser = null;
+    state.penaltySelected = new Set();
+    state.pending = null;
+    state.pendingBefore = null;
+    state.pendingTruth = null;
+    acceptPlay(pending, pendingBefore);
+    return;
+  }
   if (pendingOwner !== null && state.hands[pendingOwner].length === 0) {
     finish(pendingOwner, "empty_hand");
     return;
   }
   clearField();
   state.lastPlayer = selector;
-  state.turn = selector;
   state.penaltySelector = null;
   state.penaltyLoser = null;
   state.penaltySelected = new Set();
   state.pending = null;
   state.pendingBefore = null;
+  state.pendingTruth = null;
   state.phase = "play";
+  setTurn(selector);
   continueTurn();
 }
 
 function startGame() {
   window.clearTimeout(cpuTimer);
+  window.clearInterval(clockTimer);
   state = freshState();
   const deck = shuffle(CARDS.map((card) => card.id));
   state.hands[0] = deck.slice(0, 7).sort((a, b) => a - b);
   state.hands[1] = deck.slice(7, 14).sort((a, b) => a - b);
-  state.turn = 0;
-  addLog("対戦開始。あなたの手番です。");
+  const starter = Math.random() < .5 ? 0 : 1;
+  setTurn(starter);
+  addLog(starter === 0 ? "親決定。あなたの手番です。" : "親決定。CPUの手番です。");
   $("#landing-screen").classList.add("is-hidden");
   $("#game-screen").classList.remove("is-hidden");
   hideModal("result-modal");
   render();
+  continueTurn();
 }
 
 function goHome() {
   window.clearTimeout(cpuTimer);
+  stopClock();
   hideModal("result-modal");
   hideModal("challenge-modal");
   hideModal("penalty-modal");
@@ -666,7 +794,7 @@ function humanPlay() {
   }
   const cardIds = state.hands[0].filter((id) => state.selected.has(id));
   const play = { cardIds, hidden: cardIds.map((id) => state.hiddenSelected.has(id)), owner: 0 };
-  if (!legalAgainst(state.current, play)) {
+  if (!legalAgainst(state.effectiveCurrent, play)) {
     showToast("その役は場に出せません。枚数・強さ・スートを確認してください。");
     return;
   }
@@ -677,9 +805,10 @@ function humanPlay() {
 
 function humanPass() {
   if (state.phase !== "play" || state.turn !== 0 || !state.current) return;
+  completeActionClock(0);
   const leader = state.lastPlayer;
   clearField();
-  state.turn = leader === null ? 1 : leader;
+  setTurn(leader === null ? 1 : leader);
   state.phase = "play";
   addLog("あなたがパス。場が流れました。");
   continueTurn();
@@ -707,6 +836,7 @@ function hideModal(id) {
 }
 
 function render() {
+  renderClock();
   $("#opponent-count").textContent = state.hands[1].length;
   $("#human-count").textContent = state.hands[0].length;
   $("#opponent-hand").innerHTML = state.hands[1]
@@ -718,21 +848,29 @@ function render() {
   $("#rule-state").textContent = `${stateLabel}${state.jBack ? "・Jバック" : ""}${state.suitLock.size ? `・${[...state.suitLock].map((suit) => SUITS[suit]).join("")}縛り` : ""}`;
 
   const turnLabel = state.phase === "challenge-human" ? "判断してください"
-    : state.phase === "penalty" ? "ペナルティ中"
+    : state.phase === "reveal" ? "公開中"
+      : state.phase === "penalty" ? "ペナルティ中"
       : state.turn === 0 ? "あなたの番" : "CPUの番";
   $("#turn-indicator").textContent = turnLabel;
   $("#turn-indicator").classList.toggle("opponent-turn", state.turn === 1 || state.phase !== "play");
-  $("#opponent-state").textContent = state.phase === "challenge-human" ? "あなたの判断待ち" : state.turn === 1 ? "思考中" : "待機中";
-  $("#human-state").textContent = state.phase === "challenge-human" ? "ダウトする？" : state.turn === 0 ? "あなたの番" : "待機中";
+  $("#opponent-state").textContent = state.phase === "challenge-human" ? "あなたの判断待ち"
+    : state.phase === "reveal" ? "公開中"
+      : state.turn === 1 ? "思考中" : "待機中";
+  $("#human-state").textContent = state.phase === "challenge-human" ? "ダウトする？"
+    : state.phase === "reveal" ? "公開中"
+      : state.turn === 0 ? "あなたの番" : "待機中";
 
   const field = $("#field-area");
   if (!state.field.length) {
     field.innerHTML = `<div class="empty-table" id="empty-table"><span>✦</span><b>場は空です</b><small>好きな役で始められます</small></div>`;
   } else {
-    field.innerHTML = state.field.map((id) => cardMarkup(id, state.fieldHidden.has(id) && !state.revealed.has(id))).join("");
+    field.innerHTML = state.field.map((id) => cardMarkup(id, state.fieldHidden.has(id) && !state.revealed.has(id), {
+      revealing: state.phase === "reveal" && state.revealed.has(id),
+    })).join("");
   }
-  const currentName = state.current ? describePlay(state.current) : null;
+  const currentName = state.effectiveCurrent ? describePlay(state.effectiveCurrent) : null;
   $("#table-message").textContent = state.phase === "challenge-human" ? "裏札を検めるか、スルーして進みます。"
+    : state.phase === "reveal" ? "裏札を公開しています。"
     : state.phase === "penalty" ? "ペナルティ札を選択しています。"
       : state.phase === "terminal" ? "対戦終了。結果を確認してください。"
         : state.turn === 0 ? (currentName ? `場は ${currentName}。場より強い役を出してください。` : "あなたの手番です。カードを選んでください。")

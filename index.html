@@ -66,6 +66,7 @@
             <strong>Million <em>Doubt</em></strong>
           </div>
           <div class="header-meta">
+            <span class="clock-chip" id="clock-chip" aria-live="polite">あなた 01:00</span>
             <span class="model-chip" id="model-chip">CPU</span>
             <button class="icon-button" id="restart-game" type="button" aria-label="最初からやり直す">↻</button>
           </div>
@@ -74,7 +75,7 @@
         <section class="scoreboard" aria-label="対戦状況">
           <div class="player-line player-line-opponent">
             <span class="player-avatar avatar-opponent">🐱</span>
-            <span><b>NN／CPU</b><small id="opponent-state">思考中</small></span>
+            <span><b>NN／CPU</b><small id="opponent-state">思考中</small><small class="player-clock" id="opponent-clock">01:00</small></span>
             <strong><span id="opponent-count">7</span><small>枚</small></strong>
             <span class="opponent-hand" id="opponent-hand" aria-label="CPUの手札"></span>
           </div>
@@ -84,7 +85,7 @@
           </div>
           <div class="player-line player-line-human">
             <strong><span id="human-count">7</span><small>枚</small></strong>
-            <span><b>あなた</b><small id="human-state">待機中</small></span>
+            <span><b>あなた</b><small id="human-state">待機中</small><small class="player-clock" id="human-clock">01:00</small></span>
             <span class="player-avatar avatar-human">🐱</span>
           </div>
         </section>
