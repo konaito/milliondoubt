@@ -741,6 +741,8 @@ function resolvePenalty(selected) {
 function startGame() {
   window.clearTimeout(cpuTimer);
   window.clearInterval(clockTimer);
+  document.body.classList.add("is-game-active");
+  window.scrollTo(0, 0);
   state = freshState();
   const deck = shuffle(CARDS.map((card) => card.id));
   state.hands[0] = deck.slice(0, 7).sort((a, b) => a - b);
@@ -758,6 +760,8 @@ function startGame() {
 function goHome() {
   window.clearTimeout(cpuTimer);
   stopClock();
+  document.body.classList.remove("is-game-active");
+  window.scrollTo(0, 0);
   hideModal("result-modal");
   hideModal("challenge-modal");
   hideModal("penalty-modal");
