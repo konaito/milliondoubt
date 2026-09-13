@@ -619,7 +619,9 @@ function chooseCpuAction(actions) {
     if (state.effectiveCurrent && power >= 0 && referencePower >= 0) {
       score -= Math.max(0, power - referencePower) * .7;
     }
-    if (action.cardIds.length === handSize) score += actual ? 1500 : 260;
+    if (action.cardIds.length === handSize) {
+      score += actual ? 1500 : (state.effectiveCurrent ? 260 : -260);
+    }
     if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === EIGHT_RANK)) score += 38;
     if (action.cardIds.some((id, index) => !action.hidden[index] && CARDS[id].rank === JACK_RANK)) score += 4;
     return { action, score };

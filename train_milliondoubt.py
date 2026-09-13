@@ -699,7 +699,7 @@ def strategic_score(state: GameState, choice: Choice, player: int) -> float:
     elif power >= 0 and reference_power >= 0:
         score -= max(0, power - reference_power) * 0.7
     if len(choice.card_ids) == len(state.hands[player]):
-        score += 1500.0 if truthful else 260.0
+        score += 1500.0 if truthful else (260.0 if state.effective_current is not None else -260.0)
     if any(not hidden and card.rank == EIGHT_RANK for card, hidden in zip(play.cards(), play.hidden)):
         score += 38.0
     if any(not hidden and card.rank == JACK_RANK for card, hidden in zip(play.cards(), play.hidden)):
@@ -1030,6 +1030,11 @@ def smoke_test() -> None:
     strategy_choices = initial_actions(strategy_state, 1, rng)
     strategy_choice = strategy_choices[strategic_choice_index(strategy_state, strategy_choices, 1)]
     assert strategy_choice == Choice.play((8,), (False,))  # 5S beats 4S
+
+    opening_state = GameState([[0, 1, 2, 3, 4, 5, 6], [20, 21, 22, 23, 24, 25, 26]], 1)
+    opening_choices = initial_actions(opening_state, 1, rng)
+    opening_choice = opening_choices[strategic_choice_index(opening_state, opening_choices, 1)]
+    assert not (len(opening_choice.card_ids) == 7 and all(opening_choice.hidden))
 
     # Penalty selection is zero-sum: the CPU should not hand cards back to the
     # opponent when it controls the selector.
