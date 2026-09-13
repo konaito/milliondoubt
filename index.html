@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#f6f2ec">
+    <meta name="theme-color" content="#5b2025">
     <meta name="description" content="ミリオンダウトをNN／CPUと遊べるブラウザアプリ">
     <title>Million Doubt — 嘘つき大富豪</title>
     <link rel="stylesheet" href="styles.css?v=3">
@@ -19,7 +19,7 @@
 
         <section class="mode-grid" aria-label="対戦モード">
           <button class="mode-card mode-card-primary" id="start-game" type="button">
-            <span class="mode-number">1 <i>vs</i> 1</span>
+            <span class="mode-number">プレイ</span>
             <span class="mode-label">NN／CPUと対戦</span>
             <span class="mode-arrow">→</span>
           </button>
@@ -62,7 +62,7 @@
         <header class="game-header">
           <button class="icon-button" id="back-home" type="button" aria-label="ホームへ戻る">←</button>
           <div class="game-title-lockup">
-            <span class="eyebrow">LIVE MATCH / 1 VS 1</span>
+          <span class="eyebrow">ミリオンダウト / 対戦中</span>
             <strong>Million <em>Doubt</em></strong>
           </div>
           <div class="header-meta">
@@ -73,9 +73,10 @@
 
         <section class="scoreboard" aria-label="対戦状況">
           <div class="player-line player-line-opponent">
-            <span class="player-avatar avatar-opponent">N</span>
+            <span class="player-avatar avatar-opponent">🐱</span>
             <span><b>NN／CPU</b><small id="opponent-state">思考中</small></span>
             <strong><span id="opponent-count">7</span><small>枚</small></strong>
+            <span class="opponent-hand" id="opponent-hand" aria-label="CPUの手札"></span>
           </div>
           <div class="match-state">
             <span class="turn-indicator" id="turn-indicator">あなたの番</span>
@@ -84,7 +85,7 @@
           <div class="player-line player-line-human">
             <strong><span id="human-count">7</span><small>枚</small></strong>
             <span><b>あなた</b><small id="human-state">待機中</small></span>
-            <span class="player-avatar avatar-human">Y</span>
+            <span class="player-avatar avatar-human">🐱</span>
           </div>
         </section>
 
@@ -112,7 +113,7 @@
           <div class="action-row">
             <button class="secondary-action" id="toggle-hidden" type="button" disabled><span>◌</span> 裏にする</button>
             <button class="secondary-action pass-action" id="pass-action" type="button" disabled>パス</button>
-            <button class="primary-action" id="play-action" type="button" disabled>場に出す <span>→</span></button>
+            <button class="primary-action" id="play-action" type="button" disabled>出す <span>→</span></button>
           </div>
         </section>
 
