@@ -19,6 +19,7 @@ import json
 import math
 import random
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -645,6 +646,94 @@ class Decision:
     obs: np.ndarray
     action_matrix: np.ndarray
     selected_index: int
+    teacher_index: int
+
+
+def strategic_score(state: GameState, choice: Choice, player: int) -> float:
+    """Score a legal choice with a small, information-safe strategy teacher.
+
+    The teacher may inspect the acting player's hand while choosing a play, but
+    it only sees public information during a challenge. This gives training a
+    stable signal without leaking an opponent's hidden cards into observations.
+    """
+    if state.phase == "challenge":
+        hidden_count = sum(state.pending.hidden) if state.pending is not None else 0
+        if choice.kind == "doubt":
+            return 7.0 if hidden_count == 1 else 14.0
+        return 9.0
+
+    if state.phase == "penalty":
+        return 24.0 if not choice.card_ids else 24.0 - len(choice.card_ids) * 2.0
+
+    if choice.kind == "pass":
+        return -50.0
+
+    play = Play(choice.card_ids, choice.hidden, player)
+    truthful = legal_against(
+        state.effective_current,
+        Play(choice.card_ids, tuple(False for _ in choice.card_ids), player),
+        state.revolution,
+        state.j_back,
+        state.suit_lock,
+        actual=True,
+    )
+    claims = claim_options(choice.card_ids, tuple(False for _ in choice.card_ids))
+    power = min((claim_power(claim, state.revolution, state.j_back) for claim in claims), default=-1)
+    reference_claims = (
+        claim_options(state.effective_current.card_ids, state.effective_current.hidden)
+        if state.effective_current is not None
+        else ()
+    )
+    reference_power = max(
+        (claim_power(claim, state.revolution, state.j_back) for claim in reference_claims),
+        default=-1,
+    )
+    hidden_count = sum(choice.hidden)
+    difficulty = sum(0 if card.is_joker else 12 - card.rank for card in play.cards())
+    score = 180.0 if truthful else -80.0
+    score += len(choice.card_ids) * 18.0
+    score += difficulty * 0.55
+    score -= hidden_count * 24.0
+    if state.effective_current is None:
+        score += len(choice.card_ids) * 10.0
+    elif power >= 0 and reference_power >= 0:
+        score -= max(0, power - reference_power) * 0.7
+    if len(choice.card_ids) == len(state.hands[player]):
+        score += 1500.0 if truthful else 260.0
+    if any(not hidden and card.rank == EIGHT_RANK for card, hidden in zip(play.cards(), play.hidden)):
+        score += 38.0
+    if any(not hidden and card.rank == JACK_RANK for card, hidden in zip(play.cards(), play.hidden)):
+        score += 4.0
+    return score
+
+
+def strategic_choice_index(state: GameState, choices: Sequence[Choice], player: int) -> int:
+    if not choices:
+        raise ValueError("no choices available")
+    scores = [strategic_score(state, choice, player) for choice in choices]
+    truthful = [
+        index for index, choice in enumerate(choices)
+        if choice.kind == "play" and legal_against(
+            state.effective_current,
+            Play(choice.card_ids, tuple(False for _ in choice.card_ids), player),
+            state.revolution,
+            state.j_back,
+            state.suit_lock,
+            actual=True,
+        )
+    ]
+    if not truthful:
+        pass_indices = [index for index, choice in enumerate(choices) if choice.kind == "pass"]
+        emergency = [
+            index for index, choice in enumerate(choices)
+            if choice.kind == "play"
+            and (len(choice.card_ids) >= 2 or len(choice.card_ids) == len(state.hands[player]))
+        ]
+        if pass_indices and not emergency:
+            return pass_indices[0]
+        if emergency:
+            return max(emergency, key=lambda index: scores[index])
+    return max(range(len(choices)), key=lambda index: scores[index])
 
 
 def choose_index(
@@ -680,6 +769,7 @@ def run_episode(
     temperature: float = 1.0,
     max_steps: int = 256,
     record: bool = False,
+    teacher_probability: float = 0.7,
 ) -> Tuple[GameState, List[Decision]]:
     state = GameState.deal(rng)
     decisions: List[Decision] = []
@@ -695,9 +785,12 @@ def run_episode(
             choices = penalty_actions(state, rng)
         else:
             break
+        teacher_index = strategic_choice_index(state, choices, player)
         index, obs, matrix = choose_index(model, state, player, choices, device, rng, temperature)
+        if model is not None and rng.random() < teacher_probability:
+            index = teacher_index
         if record and obs is not None and matrix is not None:
-            decisions.append(Decision(player, obs, matrix, index))
+            decisions.append(Decision(player, obs, matrix, index, teacher_index))
         state.apply(choices[index])
     if not state.terminal():
         # A safety cutoff is recorded as a loss for the player with more cards.
@@ -715,6 +808,30 @@ def terminal_rewards(state: GameState) -> Tuple[float, float]:
         magnitude = len(state.hands[loser])
     return (float(magnitude) if state.winner == 0 else -float(magnitude),
             float(magnitude) if state.winner == 1 else -float(magnitude))
+
+
+class ProgressStore:
+    """Write a small atomic status snapshot that can be watched over SSH."""
+
+    def __init__(self, total_episodes: int, device: str, path: Path) -> None:
+        self.path = path
+        self.data: Dict[str, object] = {
+            "status": "idle",
+            "total_episodes": total_episodes,
+            "episodes_completed": 0,
+            "device": device,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def update(self, **fields: object) -> None:
+        self.data.update(fields)
+        completed = int(self.data.get("episodes_completed", 0) or 0)
+        total = max(1, int(self.data.get("total_episodes", 1) or 1))
+        self.data["progress_percent"] = round(min(100.0, completed * 100.0 / total), 2)
+        self.data["updated_at"] = time.time()
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        temporary.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
 
 
 def select_device(requested: str) -> "torch.device":
@@ -757,7 +874,15 @@ def train(args: argparse.Namespace) -> None:
             break
         episodes: List[Tuple[GameState, List[Decision]]] = []
         for _ in range(batch):
-            episodes.append(run_episode(model, rng, device, args.temperature, args.max_steps, record=True))
+            episodes.append(run_episode(
+                model,
+                rng,
+                device,
+                args.temperature,
+                args.max_steps,
+                record=True,
+                teacher_probability=args.teacher_probability,
+            ))
             progress.update(
                 update=update + 1,
                 episodes_completed=update * args.batch_episodes + len(episodes),
@@ -766,6 +891,7 @@ def train(args: argparse.Namespace) -> None:
         policy_losses: List[torch.Tensor] = []
         value_losses: List[torch.Tensor] = []
         entropies: List[torch.Tensor] = []
+        teacher_losses: List[torch.Tensor] = []
         rewards: List[float] = []
         for state, decisions in episodes:
             rewards_pair = terminal_rewards(state)
@@ -782,6 +908,10 @@ def train(args: argparse.Namespace) -> None:
                 policy_losses.append(-log_prob * advantage.detach())
                 value_losses.append(F.smooth_l1_loss(values[decision.selected_index], target))
                 entropies.append(distribution.entropy())
+                teacher_losses.append(F.cross_entropy(
+                    logits.unsqueeze(0),
+                    torch.tensor([decision.teacher_index], dtype=torch.long, device=device),
+                ))
 
         if not policy_losses:
             continue
@@ -789,6 +919,7 @@ def train(args: argparse.Namespace) -> None:
             torch.stack(policy_losses).mean()
             + args.value_weight * torch.stack(value_losses).mean()
             - args.entropy_weight * torch.stack(entropies).mean()
+            + args.teacher_weight * torch.stack(teacher_losses).mean()
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -806,6 +937,7 @@ def train(args: argparse.Namespace) -> None:
                     "device": str(device),
                     "loss": float(loss.detach().cpu()),
                     "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
+                    "teacher_weight": args.teacher_weight,
                     "wins": wins,
                 },
                 ensure_ascii=False,
@@ -820,6 +952,7 @@ def train(args: argparse.Namespace) -> None:
                 "episodes": completed,
                 "seed": args.seed,
                 "rules": "milliondoubt-rulebook-2026-09-12",
+                "strategy": "teacher-guided-self-play-v2",
             },
             out_path,
         )
@@ -890,6 +1023,23 @@ def smoke_test() -> None:
     assert revolution_state.revolution
     assert revolution_state.winner == 1
 
+    # The strategy teacher returns the smallest truthful response and avoids a
+    # needless hidden card when a visible response is available.
+    strategy_state = GameState([[4, 6], [8, 40]], 0)
+    strategy_state.apply(Choice.play((4,), (False,)))  # 4S
+    strategy_choices = initial_actions(strategy_state, 1, rng)
+    strategy_choice = strategy_choices[strategic_choice_index(strategy_state, strategy_choices, 1)]
+    assert strategy_choice == Choice.play((8,), (False,))  # 5S beats 4S
+
+    # Penalty selection is zero-sum: the CPU should not hand cards back to the
+    # opponent when it controls the selector.
+    penalty_state = GameState([[0], [1]], 1)
+    penalty_state.field_ids = [4, 8]
+    penalty_state.phase = "penalty"
+    penalty_state.turn = 1
+    penalty_choices = penalty_actions(penalty_state, rng)
+    assert penalty_choices[strategic_choice_index(penalty_state, penalty_choices, 1)].card_ids == ()
+
     for _ in range(20):
         end, _ = run_episode(None, rng, None, temperature=1.0, max_steps=256, record=False)
         assert end.terminal()
@@ -907,6 +1057,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--value-weight", type=float, default=0.5)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
+    parser.add_argument("--teacher-weight", type=float, default=0.6)
+    parser.add_argument("--teacher-probability", type=float, default=0.7)
     parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
     parser.add_argument("--out", default="checkpoints/milliondoubt_policy.pt")
     parser.add_argument("--status-file", default="checkpoints/milliondoubt_status.json")
