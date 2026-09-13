@@ -709,6 +709,9 @@ function hideModal(id) {
 function render() {
   $("#opponent-count").textContent = state.hands[1].length;
   $("#human-count").textContent = state.hands[0].length;
+  $("#opponent-hand").innerHTML = state.hands[1]
+    .map(() => '<span class="mini-card-back" aria-hidden="true"></span>')
+    .join("");
   $("#field-count").textContent = `場札 ${state.field.length}枚`;
   $("#round-label").textContent = `ROUND ${String(state.round).padStart(2, "0")}`;
   const stateLabel = state.revolution ? "革命" : "通常";
