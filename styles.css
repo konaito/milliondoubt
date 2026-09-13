@@ -642,3 +642,48 @@ body { background: #0c0b0d; }
 @media (prefers-reduced-motion: reduce) {
   .card.is-revealing { animation: none; }
 }
+
+/* Keep the live table inside the viewport and preserve contrast in the hand. */
+body.is-game-active { overflow: hidden; }
+
+.game-screen {
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+}
+
+@supports (height: 100svh) {
+  .game-screen {
+    height: 100svh;
+    min-height: 100svh;
+    max-height: 100svh;
+  }
+}
+
+.game-screen .table-panel,
+.game-screen .field-area {
+  min-height: 0;
+}
+
+.game-screen .card { color: #2b2524; }
+
+.game-screen .card-hidden { color: #fff; }
+
+.hand-panel .secondary-action:disabled,
+.hand-panel .primary-action:disabled {
+  opacity: .72;
+}
+
+.hand-panel .secondary-action:disabled {
+  border-color: rgba(255, 219, 130, .34);
+  background: rgba(35, 15, 13, .22);
+  color: rgba(255, 236, 192, .72);
+}
+
+.hand-panel .secondary-action:disabled span { color: rgba(240, 198, 91, .72); }
+
+.hand-panel .primary-action:disabled {
+  background: rgba(255, 246, 215, .62);
+  color: rgba(74, 37, 29, .78);
+  box-shadow: 0 3px 0 rgba(37, 19, 18, .65);
+}
