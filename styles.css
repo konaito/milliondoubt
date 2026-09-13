@@ -608,3 +608,37 @@ body { background: #0c0b0d; }
   .hand-area .card { width: 45px; flex-basis: 45px; }
   .hand-area { gap: 0; }
 }
+
+/* Interaction feedback keeps the table readable while actions resolve. */
+.clock-chip {
+  padding: 5px 7px;
+  border: 1px solid rgba(255, 224, 145, .28);
+  border-radius: 999px;
+  color: rgba(255, 231, 170, .76);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.clock-chip.is-active {
+  border-color: rgba(255, 224, 145, .72);
+  color: #fff0b7;
+}
+
+.player-clock {
+  color: rgba(255, 229, 161, .52) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.card.is-revealing {
+  animation: reveal-card .42s ease both;
+}
+
+@keyframes reveal-card {
+  0% { transform: rotateY(90deg) scale(.92); opacity: .42; }
+  55% { transform: rotateY(-8deg) scale(1.04); opacity: 1; }
+  100% { transform: rotateY(0) scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.is-revealing { animation: none; }
+}

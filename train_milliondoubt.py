@@ -250,7 +250,9 @@ class GameState:
         self.suit_lock: Set[int] = set()
         self.phase = "play"
         self.pending: Optional[Play] = None
-        self.pending_before: Optional[Tuple[Optional[Play], bool, bool, Set[int], List[int]]] = None
+        self.effective_current: Optional[Play] = None
+        self.pending_before: Optional[Tuple[Optional[Play], Optional[Play], bool, bool, Set[int], List[int]]] = None
+        self.pending_truth: Optional[bool] = None
         self.penalty_selector: Optional[int] = None
         self.penalty_loser: Optional[int] = None
         self.winner: Optional[int] = None
@@ -265,14 +267,29 @@ class GameState:
     def terminal(self) -> bool:
         return self.phase == "terminal"
 
-    def _snapshot(self) -> Tuple[Optional[Play], bool, bool, Set[int], List[int]]:
-        return (self.current, self.revolution, self.j_back, set(self.suit_lock), list(self.field_ids))
+    def _snapshot(self) -> Tuple[Optional[Play], Optional[Play], bool, bool, Set[int], List[int]]:
+        return (
+            self.current,
+            self.effective_current,
+            self.revolution,
+            self.j_back,
+            set(self.suit_lock),
+            list(self.field_ids),
+        )
 
-    def _restore_view(self, snapshot: Tuple[Optional[Play], bool, bool, Set[int], List[int]]) -> None:
-        self.current, self.revolution, self.j_back, self.suit_lock, self.field_ids = snapshot
+    def _restore_view(self, snapshot: Tuple[Optional[Play], Optional[Play], bool, bool, Set[int], List[int]]) -> None:
+        (
+            self.current,
+            self.effective_current,
+            self.revolution,
+            self.j_back,
+            self.suit_lock,
+            self.field_ids,
+        ) = snapshot
 
     def _clear_field(self) -> None:
         self.current = None
+        self.effective_current = None
         self.field_ids = []
         self.passes = 0
         self.j_back = False
@@ -289,8 +306,12 @@ class GameState:
             return True
         return False
 
-    def _accept(self, play: Play, previous: Tuple[Optional[Play], bool, bool, Set[int], List[int]]) -> None:
-        previous_play, previous_revolution, previous_j_back, previous_lock, _ = previous
+    def _accept(
+        self,
+        play: Play,
+        previous: Tuple[Optional[Play], Optional[Play], bool, bool, Set[int], List[int]],
+    ) -> None:
+        previous_play, previous_effective, previous_revolution, previous_j_back, previous_lock, _ = previous
         previous_suits = previous_play.visible_suits() if previous_play and not previous_play.all_hidden() else set()
         current_suits = play.visible_suits()
         if previous_suits and current_suits and previous_suits == current_suits:
@@ -299,6 +320,7 @@ class GameState:
             self.suit_lock = set()
 
         self.current = play
+        self.effective_current = previous_effective if play.all_hidden() else play
         self.last_player = play.owner
         self.passes = 0
         if len(play.card_ids) >= 4:
@@ -323,13 +345,14 @@ class GameState:
         loser = owner if challenge_success else challenger
         self.penalty_selector = winner
         self.penalty_loser = loser
+        self.pending_truth = truth
         self.turn = winner
         self.phase = "penalty"
 
     def _truth_of_pending(self) -> bool:
         assert self.pending is not None and self.pending_before is not None
-        previous, revolution, j_back, lock, _field = self.pending_before
-        return legal_against(previous, self.pending, revolution, j_back, lock, actual=True)
+        _previous, previous_effective, revolution, j_back, lock, _field = self.pending_before
+        return legal_against(previous_effective, self.pending, revolution, j_back, lock, actual=True)
 
     def apply(self, choice: Choice) -> None:
         if self.terminal():
@@ -346,6 +369,7 @@ class GameState:
                 before = self.pending_before
                 self.pending = None
                 self.pending_before = None
+                self.pending_truth = None
                 self._accept(pending, before)
             else:
                 challenger = self.turn
@@ -365,6 +389,16 @@ class GameState:
             if len(self.hands[self.penalty_loser]) >= 11:
                 self._finish(winner, "burst")
                 return
+            if self.pending_truth is True and self.pending is not None and self.pending_before is not None:
+                pending = self.pending
+                before = self.pending_before
+                self.penalty_selector = None
+                self.penalty_loser = None
+                self.pending = None
+                self.pending_before = None
+                self.pending_truth = None
+                self._accept(pending, before)
+                return
             if pending_owner is not None and len(self.hands[pending_owner]) == 0:
                 # A truthful final play can be challenged before its winner is
                 # confirmed. Resolve the empty-hand win after the penalty UI.
@@ -377,6 +411,7 @@ class GameState:
             self.penalty_loser = None
             self.pending = None
             self.pending_before = None
+            self.pending_truth = None
             self.phase = "play"
         else:
             raise ValueError("unknown game phase")
@@ -404,7 +439,7 @@ class GameState:
         if any(card_id not in self.hands[player] for card_id in choice.card_ids):
             raise ValueError("played card is not in the player's hand")
         proposed = Play(tuple(choice.card_ids), tuple(choice.hidden), player)
-        if not legal_against(self.current, proposed, self.revolution, self.j_back, self.suit_lock):
+        if not legal_against(self.effective_current, proposed, self.revolution, self.j_back, self.suit_lock):
             raise ValueError("illegal presented play")
 
         before = self._snapshot()
@@ -415,6 +450,7 @@ class GameState:
         if any(choice.hidden):
             self.pending = proposed
             self.pending_before = before
+            self.pending_truth = None
             self.phase = "challenge"
             self.turn = 1 - player
         else:
@@ -445,7 +481,7 @@ def initial_actions(state: GameState, player: int, rng: random.Random, max_actio
         for mask in sorted(masks):
             hidden = tuple(bool(mask & (1 << i)) for i in range(size))
             proposed = Play(combo, hidden, player)
-            if legal_against(state.current, proposed, state.revolution, state.j_back, state.suit_lock):
+            if legal_against(state.effective_current, proposed, state.revolution, state.j_back, state.suit_lock):
                 candidates.append(Choice.play(combo, hidden))
 
     dedup: Dict[Tuple[object, ...], Choice] = {}
@@ -518,7 +554,8 @@ def observation(state: GameState, player: int) -> np.ndarray:
     one_hot(min(len(state.field_ids), MAX_HAND), MAX_HAND + 1)
     one_hot(hidden_count, MAX_HAND + 1)
     one_hot(min(len(state.current.card_ids) if state.current else 0, MAX_HAND), MAX_HAND + 1)
-    current_rank = visible_rank(state.current.card_ids, state.current.hidden) if state.current else None
+    current_view = state.effective_current or state.current
+    current_rank = visible_rank(current_view.card_ids, current_view.hidden) if current_view else None
     one_hot(current_rank if current_rank is not None else -1, 14)
     values.extend([float(state.revolution), float(state.j_back)])
     lock = [0.0] * 4
@@ -561,8 +598,8 @@ def action_features(state: GameState, choice: Choice, player: int) -> np.ndarray
     values.extend(suit_block)
 
     ref_block = [0.0] * NUM_CARDS
-    if state.current is not None:
-        for card_id, is_hidden in zip(state.current.card_ids, state.current.hidden):
+    if state.effective_current is not None:
+        for card_id, is_hidden in zip(state.effective_current.card_ids, state.effective_current.hidden):
             if not is_hidden:
                 ref_block[card_id] = 1.0
     values.extend(ref_block)
@@ -827,6 +864,31 @@ def smoke_test() -> None:
     state.apply(Choice.penalty(()))
     assert state.phase == "play"
     assert len(state.hands[0]) == 6 and len(state.hands[1]) == 7
+
+    # A fully hidden set is a real field card set, but it does not replace the
+    # previous set used for the next comparison.
+    hidden_state = GameState([[40, 0], [4, 5, 6]], 0)
+    hidden_state.apply(Choice.play((40,), (False,)))
+    hidden_state.apply(Choice.play((4,), (True,)))
+    hidden_state.apply(Choice("suru"))
+    assert hidden_state.current is not None and hidden_state.current.all_hidden()
+    assert hidden_state.effective_current is not None
+    assert hidden_state.effective_current.card_ids == (40,)
+    try:
+        hidden_state.apply(Choice.play((0,), (False,)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a face-up 3 must not beat the preserved K reference")
+
+    # A truthful four-card play that was doubted still establishes a revolution
+    # before the final hand check is made.
+    revolution_state = GameState([[20], [4, 5, 6, 7]], 1)
+    revolution_state.apply(Choice.play((4, 5, 6, 7), (True, True, True, True)))
+    revolution_state.apply(Choice("doubt"))
+    revolution_state.apply(Choice.penalty(()))
+    assert revolution_state.revolution
+    assert revolution_state.winner == 1
 
     for _ in range(20):
         end, _ = run_episode(None, rng, None, temperature=1.0, max_steps=256, record=False)
